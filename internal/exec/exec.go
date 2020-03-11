@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"reflect"
 	"runtime/debug"
-	"sync"
 
 	"github.com/JoinCAD/graphql-go/errors"
 	"github.com/JoinCAD/graphql-go/internal/common"
@@ -69,28 +68,13 @@ func resolvedToNull(b *bytes.Buffer) bool {
 }
 
 func (r *Request) execSelections(ctx context.Context, sels []selected.Selection, path *pathSegment, s *resolvable.Schema, resolver reflect.Value, out *bytes.Buffer, serially bool) {
-	async := !serially && selected.HasAsyncSel(sels)
 
 	var fields []*fieldToExec
 	collectFieldsToResolve(sels, s, resolver, &fields, make(map[string]*fieldToExec))
 
-	if async {
-		var wg sync.WaitGroup
-		wg.Add(len(fields))
-		for _, f := range fields {
-			go func(f *fieldToExec) {
-				defer wg.Done()
-				defer r.handlePanic(ctx)
-				f.out = new(bytes.Buffer)
-				execFieldSelection(ctx, r, s, f, &pathSegment{path, f.field.Alias}, true)
-			}(f)
-		}
-		wg.Wait()
-	} else {
-		for _, f := range fields {
-			f.out = new(bytes.Buffer)
-			execFieldSelection(ctx, r, s, f, &pathSegment{path, f.field.Alias}, true)
-		}
+	for _, f := range fields {
+		f.out = new(bytes.Buffer)
+		execFieldSelection(ctx, r, s, f, &pathSegment{path, f.field.Alias}, true)
 	}
 
 	out.WriteByte('{')
@@ -314,21 +298,8 @@ func (r *Request) execList(ctx context.Context, sels []selected.Selection, typ *
 	l := resolver.Len()
 	entryouts := make([]bytes.Buffer, l)
 
-	if selected.HasAsyncSel(sels) {
-		var wg sync.WaitGroup
-		wg.Add(l)
-		for i := 0; i < l; i++ {
-			go func(i int) {
-				defer wg.Done()
-				defer r.handlePanic(ctx)
-				r.execSelectionSet(ctx, sels, typ.OfType, &pathSegment{path, i}, s, resolver.Index(i), &entryouts[i])
-			}(i)
-		}
-		wg.Wait()
-	} else {
-		for i := 0; i < l; i++ {
-			r.execSelectionSet(ctx, sels, typ.OfType, &pathSegment{path, i}, s, resolver.Index(i), &entryouts[i])
-		}
+	for i := 0; i < l; i++ {
+		r.execSelectionSet(ctx, sels, typ.OfType, &pathSegment{path, i}, s, resolver.Index(i), &entryouts[i])
 	}
 
 	_, listOfNonNull := typ.OfType.(*common.NonNull)
